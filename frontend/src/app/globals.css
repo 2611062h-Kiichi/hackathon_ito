@@ -1,0 +1,14 @@
+@import "tailwindcss";
+
+/* ロゴの配色 */
+@theme {
+  --color-leaf: #3fa77a;
+  --color-sun: #f0a73a;
+  --color-navy: #13254a;
+  --font-sans: var(--font-noto-sans-jp), sans-serif;
+}
+
+body {
+  background: #ffffff;
+  color: #1f2937;
+}
