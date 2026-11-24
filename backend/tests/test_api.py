@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 from app import gemini
 from app.classifier import Pattern, classify
 from app.main import app
+from app.prompt_builder import build_base, build_prompt
 
 client = TestClient(app)
 
@@ -34,6 +35,30 @@ def test_classify_api():
     body = res.json()
     assert body["pattern"] == "knowledge"
     assert body["base"] == {"topic": "Git", "pattern": "knowledge", "goal": "知識補完", "level": "beginner"}
+
+
+def test_prompt_includes_details():
+    base = build_base("Git", Pattern.KNOWLEDGE)
+    prompt = build_prompt(base, 1, {"scope": "ブランチの使い方", "situation": "  ", "unknown": "無視される"})
+    assert "深掘りしたい範囲: ブランチの使い方" in prompt
+    assert "今の状況" not in prompt
+    assert "無視される" not in prompt
+
+
+def test_prompt_without_details():
+    prompt = build_prompt(build_base("Git", Pattern.KNOWLEDGE), 1)
+    assert "ユーザーからの補足" not in prompt
+
+
+def test_explain_passes_details(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(gemini, "generate", lambda prompt: captured.setdefault("prompt", prompt))
+    base = {"topic": "進路", "pattern": "decision", "goal": "選択肢整理・比較・優先順位付け", "level": "beginner"}
+    details = {"situation": "就職か進学で迷っている", "opinion": "研究は好き"}
+    res = client.post("/api/explain", json={"base": base, "attempt": 1, "details": details})
+    assert res.status_code == 200
+    assert "今の状況: 就職か進学で迷っている" in captured["prompt"]
+    assert "ユーザー自身の考え・意見: 研究は好き" in captured["prompt"]
 
 
 def test_explain_limit(monkeypatch):

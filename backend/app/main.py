@@ -32,6 +32,10 @@ class ClassifyResponse(BaseModel):
 class ExplainRequest(BaseModel):
     base: dict
     attempt: int = Field(ge=1, description="何回目の説明か（1始まり）")
+    details: dict[str, str] = Field(
+        default_factory=dict,
+        description="分類後の追加入力（scope / situation / opinion / cause、すべて任意）",
+    )
 
 
 class ExplainResponse(BaseModel):
@@ -68,7 +72,7 @@ def explain_endpoint(req: ExplainRequest) -> ExplainResponse:
             detail=f"AI解説は1セッション{limit}回までです。わからない点を具体的に追記して、新しく質問してください。",
         )
     # TODO: セッションIDと回数をSupabaseに保存し、サーバー側で回数を管理する
-    prompt = build_prompt(req.base, req.attempt)
+    prompt = build_prompt(req.base, req.attempt, req.details)
     return ExplainResponse(
         attempt=req.attempt,
         remaining=limit - req.attempt,

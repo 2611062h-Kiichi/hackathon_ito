@@ -15,7 +15,8 @@ INSTRUCTIONS: dict[Pattern, str] = {
     ),
     Pattern.KNOWLEDGE: (
         "ユーザーは必要な知識や用語が不足しています。前提知識から順に、専門用語は言い換えながら、"
-        "身近な具体例を使って説明してください。"
+        "身近な具体例を使って説明してください。深掘りしたい範囲が指定されている場合は、その範囲を中心に、"
+        "関連する用語や知識も幅広く紹介してください。"
     ),
     Pattern.PSYCHOLOGICAL: (
         "ユーザーは失敗への不安や自信のなさでつまずいています。不安を言語化して整理し、"
@@ -31,6 +32,26 @@ ATTEMPT_STYLES = {
 }
 
 
+# 分類後の追加入力（深掘り）の項目。キーはフロントエンドと共通
+DETAIL_LABELS: dict[str, str] = {
+    "scope": "深掘りしたい範囲",
+    "situation": "今の状況",
+    "opinion": "ユーザー自身の考え・意見",
+    "cause": "ユーザーが考える原因",
+}
+MAX_DETAIL_LENGTH = 500
+
+
+def format_details(details: dict[str, str] | None) -> str:
+    """追加入力をプロンプト用の箇条書きにする。未知のキー・空欄は無視する。"""
+    lines = []
+    for key, label in DETAIL_LABELS.items():
+        value = (details or {}).get(key, "").strip()
+        if value:
+            lines.append(f"- {label}: {value[:MAX_DETAIL_LENGTH]}")
+    return "\n".join(lines)
+
+
 def build_base(topic: str, pattern: Pattern, level: str = "beginner") -> dict:
     return {
         "topic": topic,
@@ -40,9 +61,11 @@ def build_base(topic: str, pattern: Pattern, level: str = "beginner") -> dict:
     }
 
 
-def build_prompt(base: dict, attempt: int) -> str:
+def build_prompt(base: dict, attempt: int, details: dict[str, str] | None = None) -> str:
     pattern = Pattern(base["pattern"])
     style = ATTEMPT_STYLES.get(attempt, ATTEMPT_STYLES[1])
+    detail_text = format_details(details)
+    detail_section = f"\n# ユーザーからの補足\n{detail_text}\n" if detail_text else ""
     return f"""あなたは「わからない」を「わかる」に変える学習サポーターです。
 
 # ユーザーのわからないこと
@@ -51,7 +74,7 @@ def build_prompt(base: dict, attempt: int) -> str:
 # 分析結果
 - つまずきの原因: {base["goal"]}
 - レベル: {base["level"]}
-
+{detail_section}
 # 指示
 {INSTRUCTIONS[pattern]}
 今回は「{style}」をしてください（{attempt}回目の説明）。

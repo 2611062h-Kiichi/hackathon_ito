@@ -7,6 +7,7 @@ import {
   type ClassifyResponse,
   type ExplainResponse,
 } from "@/lib/api";
+import { FOLLOW_UP } from "@/lib/followUp";
 import { CHOICES, QUESTIONS, UNDERSTANDING_LEVELS } from "@/lib/questions";
 
 type Step = "topic" | "survey" | "result";
@@ -18,6 +19,7 @@ export default function Home() {
     Array(QUESTIONS.length).fill(null),
   );
   const [result, setResult] = useState<ClassifyResponse | null>(null);
+  const [details, setDetails] = useState<Record<string, string>>({});
   const [explanations, setExplanations] = useState<ExplainResponse[]>([]);
   const [understanding, setUnderstanding] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
@@ -43,13 +45,17 @@ export default function Home() {
     if (!r) return;
     setResult(r);
     setStep("result");
-    const ex = await run(() => explain(r.base, 1));
+  }
+
+  async function handleStartExplain() {
+    if (!result) return;
+    const ex = await run(() => explain(result.base, 1, details));
     if (ex) setExplanations([ex]);
   }
 
   async function handleReexplain() {
     if (!result || !latest) return;
-    const ex = await run(() => explain(result.base, latest.attempt + 1));
+    const ex = await run(() => explain(result.base, latest.attempt + 1, details));
     if (ex) {
       setExplanations((prev) => [...prev, ex]);
       setUnderstanding(null);
@@ -61,6 +67,7 @@ export default function Home() {
     setTopic("");
     setAnswers(Array(QUESTIONS.length).fill(null));
     setResult(null);
+    setDetails({});
     setExplanations([]);
     setUnderstanding(null);
     setError(null);
@@ -145,6 +152,39 @@ export default function Home() {
             <p className="mt-1 text-sm text-navy/70">AIのサポート: {result.base.goal}</p>
           </div>
 
+          {explanations.length === 0 && (
+            <div className="space-y-4 rounded-lg border border-leaf/40 p-4">
+              <div>
+                <p className="font-bold text-navy">もう少しくわしく教えてください</p>
+                <p className="mt-1 text-sm text-navy/70">{FOLLOW_UP[result.pattern].lead}</p>
+              </div>
+              {FOLLOW_UP[result.pattern].fields.map((f) => (
+                <div key={f.key}>
+                  <label className="mb-1 block text-sm font-bold text-navy" htmlFor={f.key}>
+                    {f.label}
+                    <span className="ml-2 text-xs font-normal text-navy/50">任意</span>
+                  </label>
+                  <textarea
+                    id={f.key}
+                    className="h-20 w-full rounded-lg border border-zinc-300 p-3 text-sm focus:border-leaf focus:outline-none"
+                    placeholder={f.placeholder}
+                    maxLength={500}
+                    value={details[f.key] ?? ""}
+                    onChange={(e) => setDetails((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                    disabled={loading}
+                  />
+                </div>
+              ))}
+              <button
+                className="w-full rounded-lg bg-leaf py-3 font-bold text-white disabled:opacity-40"
+                disabled={loading}
+                onClick={handleStartExplain}
+              >
+                {loading ? "AIが説明を考えています…" : "解説を聞く"}
+              </button>
+            </div>
+          )}
+
           {explanations.map((ex) => (
             <article key={ex.attempt} className="rounded-lg border border-zinc-200 p-4">
               <p className="mb-2 text-xs font-bold text-sun">説明 {ex.attempt} 回目</p>
@@ -152,7 +192,9 @@ export default function Home() {
             </article>
           ))}
 
-          {loading && <p className="text-center text-navy/70">AIが説明を考えています…</p>}
+          {loading && explanations.length > 0 && (
+            <p className="text-center text-navy/70">AIが説明を考えています…</p>
+          )}
 
           {latest && !loading && (
             <div className="space-y-3">

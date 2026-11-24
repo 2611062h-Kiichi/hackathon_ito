@@ -38,5 +38,8 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 export const classify = (topic: string, answers: number[]) =>
   post<ClassifyResponse>("/api/classify", { topic, answers });
 
-export const explain = (base: PromptBase, attempt: number) =>
-  post<ExplainResponse>("/api/explain", { base, attempt });
+export const explain = (
+  base: PromptBase,
+  attempt: number,
+  details: Record<string, string> = {},
+) => post<ExplainResponse>("/api/explain", { base, attempt, details });
