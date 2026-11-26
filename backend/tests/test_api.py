@@ -61,6 +61,41 @@ def test_explain_passes_details(monkeypatch):
     assert "ユーザー自身の考え・意見: 研究は好き" in captured["prompt"]
 
 
+class _FakeModels:
+    def __init__(self, failing: set[str]):
+        self.failing = failing
+        self.called: list[str] = []
+
+    def generate_content(self, model, contents):
+        self.called.append(model)
+        if model in self.failing:
+            raise gemini.errors.ServerError(503, {"error": {"message": "busy", "status": "UNAVAILABLE"}})
+        return type("R", (), {"text": f"from {model}"})()
+
+
+def _use_fake(monkeypatch, failing: set[str]) -> _FakeModels:
+    fake = _FakeModels(failing)
+    monkeypatch.setattr(gemini.settings, "gemini_api_key", "dummy")
+    monkeypatch.setattr(gemini.settings, "gemini_model", "main-model")
+    monkeypatch.setattr(gemini.settings, "gemini_fallback_models", "backup-1,backup-2")
+    monkeypatch.setattr(gemini, "_get_client", lambda: type("C", (), {"models": fake})())
+    return fake
+
+
+def test_gemini_falls_back_when_busy(monkeypatch):
+    fake = _use_fake(monkeypatch, failing={"main-model"})
+    assert gemini.generate("p") == "from backup-1"
+    assert fake.called == ["main-model", "backup-1"]
+
+
+def test_explain_returns_503_when_all_models_busy(monkeypatch):
+    _use_fake(monkeypatch, failing={"main-model", "backup-1", "backup-2"})
+    base = {"topic": "Git", "pattern": "knowledge", "goal": "知識補完", "level": "beginner"}
+    res = client.post("/api/explain", json={"base": base, "attempt": 1})
+    assert res.status_code == 503
+    assert "混み合っています" in res.json()["detail"]
+
+
 def test_explain_limit(monkeypatch):
     monkeypatch.setattr(gemini, "generate", lambda prompt: "dummy")
     base = {"topic": "Git", "pattern": "knowledge", "goal": "知識補完", "level": "beginner"}

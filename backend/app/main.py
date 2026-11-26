@@ -73,8 +73,12 @@ def explain_endpoint(req: ExplainRequest) -> ExplainResponse:
         )
     # TODO: セッションIDと回数をSupabaseに保存し、サーバー側で回数を管理する
     prompt = build_prompt(req.base, req.attempt, req.details)
+    try:
+        explanation = gemini.generate(prompt)
+    except gemini.GeminiUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
     return ExplainResponse(
         attempt=req.attempt,
         remaining=limit - req.attempt,
-        explanation=gemini.generate(prompt),
+        explanation=explanation,
     )
