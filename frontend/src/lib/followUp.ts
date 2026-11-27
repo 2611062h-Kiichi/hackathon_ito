@@ -3,6 +3,14 @@ import type { Pattern } from "./api";
 // 分類後に表示する深掘り入力欄。key はバックエンドの DETAIL_LABELS と共通
 export type DetailKey = "scope" | "situation" | "opinion" | "cause";
 
+// 記録の詳細ページで表示する名前
+export const DETAIL_LABELS: Record<string, string> = {
+  scope: "深掘りしたい範囲",
+  situation: "今の状況",
+  opinion: "自分の考え・意見",
+  cause: "不安の原因",
+};
+
 export type FollowUpField = {
   key: DetailKey;
   label: string;

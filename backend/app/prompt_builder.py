@@ -42,6 +42,15 @@ DETAIL_LABELS: dict[str, str] = {
 MAX_DETAIL_LENGTH = 500
 
 
+def clean_details(details: dict[str, str] | None) -> dict[str, str]:
+    """保存用に、既知の項目だけを残して空欄を除き、長さを制限する。"""
+    return {
+        key: value.strip()[:MAX_DETAIL_LENGTH]
+        for key, value in (details or {}).items()
+        if key in DETAIL_LABELS and value.strip()
+    }
+
+
 def format_details(details: dict[str, str] | None) -> str:
     """追加入力をプロンプト用の箇条書きにする。未知のキー・空欄は無視する。"""
     lines = []
