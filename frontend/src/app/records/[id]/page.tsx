@@ -3,9 +3,11 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
+import Knit from "@/components/Knit";
 import SummaryCard from "@/components/SummaryCard";
 import { getSession, type SessionDetail } from "@/lib/api";
 import { DETAIL_LABELS } from "@/lib/followUp";
+import { knitStage } from "@/lib/knit";
 import { formatDate } from "@/lib/patterns";
 
 function RecordDetail() {
@@ -31,6 +33,17 @@ function RecordDetail() {
       {session && (
         <>
           <p className="text-xs text-navy/60">{formatDate(session.created_at)}</p>
+
+          <Knit
+            sessionId={session.id}
+            stage={knitStage({
+              status: session.status,
+              understanding: session.understanding,
+              explained: session.explanations.length > 0,
+            })}
+            size="lg"
+            showCaption
+          />
 
           {session.status === "completed" ? (
             <SummaryCard session={session} />

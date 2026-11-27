@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import Knit from "@/components/Knit";
 import SummaryCard from "@/components/SummaryCard";
 import {
   completeSession,
@@ -12,6 +13,7 @@ import {
   type SessionDetail,
 } from "@/lib/api";
 import { FOLLOW_UP } from "@/lib/followUp";
+import { knitStage } from "@/lib/knit";
 import { CHOICES, QUESTIONS, UNDERSTANDING_LEVELS } from "@/lib/questions";
 
 type Step = "topic" | "survey" | "result" | "done";
@@ -172,6 +174,12 @@ export default function Home() {
             <p className="mt-1 text-sm text-navy/70">AIのサポート: {result.base.goal}</p>
           </div>
 
+          <Knit
+            sessionId={result.session_id}
+            stage={explanations.length > 0 ? 2 : 1}
+            showCaption
+          />
+
           {explanations.length === 0 && (
             <div className="space-y-4 rounded-lg border border-leaf/40 p-4">
               <div>
@@ -269,7 +277,17 @@ export default function Home() {
 
       {step === "done" && record && (
         <section className="space-y-4">
-          <p className="text-center font-bold text-navy">学習メモとして記録しました</p>
+          <Knit
+            sessionId={record.id}
+            stage={knitStage({ status: record.status, understanding: record.understanding, explained: true })}
+            size="lg"
+            showCaption
+          />
+          <p className="text-center text-sm text-navy/70">
+            {record.understanding !== null && record.understanding >= 4
+              ? "学習メモとして記録しました。"
+              : "学習メモとして記録しました。わかったら、また続きを編みましょう。"}
+          </p>
           <SummaryCard session={record} />
           <Link
             href="/records"
