@@ -4,7 +4,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from . import gemini, summarizer
+from . import gemini, mindmap, summarizer
 from .classifier import PATTERN_LABELS, Pattern, classify
 from .config import settings
 from .prompt_builder import build_base, build_prompt, clean_details
@@ -18,6 +18,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(mindmap.router)
 
 # 端末ID（ブラウザで発行するランダムな文字列）
 UserId = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{8,64}$", description="端末ID")]

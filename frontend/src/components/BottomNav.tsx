@@ -7,6 +7,7 @@ import { Suspense } from "react";
 // 下部ナビの項目。機能を増やすときはここに追加する（#3）
 const NAV_ITEMS = [
   { href: "/", label: "糸口探し", icon: "🔍", match: (p: string) => p === "/" },
+  { href: "/mindmap", label: "ことばマップ", icon: "🧵", match: (p: string) => p.startsWith("/mindmap") },
   { href: "/records", label: "記録", icon: "🧶", match: (p: string) => p.startsWith("/records") },
 ];
 
