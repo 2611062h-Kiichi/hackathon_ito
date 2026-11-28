@@ -195,6 +195,15 @@ function segmentHits(x1: number, y1: number, x2: number, y2: number, b: Box): bo
   return false;
 }
 
+// 2本の線分が交差するか（端の点を共有している線どうしは、交差に数えない）
+type Pt = { x: number; y: number };
+function segmentsCross(a: Pt, b: Pt, c: Pt, d: Pt): boolean {
+  const same = (p: Pt, q: Pt) => Math.abs(p.x - q.x) < 1e-6 && Math.abs(p.y - q.y) < 1e-6;
+  if (same(a, c) || same(a, d) || same(b, c) || same(b, d)) return false;
+  const side = (p: Pt, q: Pt, r: Pt) => Math.sign((q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x));
+  return side(a, b, c) * side(a, b, d) < 0 && side(c, d, a) * side(c, d, b) < 0;
+}
+
 // 向き a に対する、箱の中心から縁までの長さ
 const extentAlong = (b: { w: number; h: number }, a: number) =>
   Math.min(
@@ -228,17 +237,24 @@ export function placeChildren(
   words.forEach((word, i) => {
     const size = { w: labelWidth(word), h: NODE_H };
     const preferred = outward + (i - (words.length - 1) / 2) * step;
-    const fits = (x: number, y: number, strict: boolean) => {
+    // level が高いほど厳しい条件
+    //   3：言葉が重ならない・線どうしが交差しない・線が言葉の上を通らない・言葉が線の上に乗らない
+    //   2：言葉が重ならない・線どうしが交差しない
+    //   1：言葉が重ならない
+    const fits = (x: number, y: number, level: number) => {
       const box = { x, y, ...size };
       if (boxes.some((b) => overlaps(box, b))) return false;
-      if (!strict) return true;
+      if (level < 2) return true;
+      // 新しい線が、ほかの線と交差しない
+      if (edges.some(([a, b]) => segmentsCross(parent, { x, y }, a, b))) return false;
+      if (level < 3) return true;
       // 新しい線が他の言葉の上を通らない
       if (boxes.some((b) => b !== parentBox && segmentHits(parent.x, parent.y, x, y, b))) return false;
       // 新しい言葉が既存の線の上に乗らない
       return !edges.some(([a, b]) => segmentHits(a.x, a.y, b.x, b.y, box));
     };
     // 親に近い場所から、希望の向きの左右へずらしながら空きを探す
-    const search = (strict: boolean, maxSteps: number, maxTurn: number) => {
+    const search = (level: number, maxSteps: number, maxTurn: number) => {
       for (let k = 0; k < maxSteps; k++) {
         for (let j = 0; j <= maxTurn; j++) {
           for (const sign of j === 0 ? [1] : [1, -1]) {
@@ -246,14 +262,37 @@ export function placeChildren(
             const dist = extentAlong(parentBox, a) + extentAlong(size, a) + 40 + k * DIST_STEP;
             const x = parent.x + dist * Math.cos(a);
             const y = parent.y + dist * Math.sin(a);
-            if (fits(x, y, strict)) return { x, y };
+            if (fits(x, y, level)) return { x, y };
           }
         }
       }
       return null;
     };
-    // まず線も重ならない場所を近くで探し、なければ言葉が重ならないことだけを守る
-    const pos = search(true, 8, 12) ?? search(false, 40, 17) ?? { x: parent.x, y: parent.y + 2000 };
+    // 交差がどうしても避けられないとき：言葉が重ならない場所のうち、交差がいちばん少なく、近い場所
+    const leastCrossing = () => {
+      let best: { x: number; y: number } | null = null;
+      let bestCount = Infinity;
+      for (let k = 0; k < 40; k++) {
+        for (let j = 0; j <= 18; j++) {
+          for (const sign of j === 0 ? [1] : [1, -1]) {
+            const a = preferred + sign * j * ANGLE_STEP;
+            const dist = extentAlong(parentBox, a) + extentAlong(size, a) + 40 + k * DIST_STEP;
+            const x = parent.x + dist * Math.cos(a);
+            const y = parent.y + dist * Math.sin(a);
+            if (!fits(x, y, 1)) continue;
+            const count = edges.filter(([p, q]) => segmentsCross(parent, { x, y }, p, q)).length;
+            if (count < bestCount) {
+              best = { x, y };
+              bestCount = count;
+            }
+          }
+        }
+      }
+      return best;
+    };
+    // まず全部の条件を満たす場所を近くから少し遠くまで探し、なければ「交差しない」だけを守り、
+    // それでもなければ交差がいちばん少ない場所にする
+    const pos = search(3, 14, 17) ?? search(2, 80, 18) ?? leastCrossing() ?? { x: parent.x, y: parent.y + 2000 };
     result.push(pos);
     boxes.push({ ...pos, ...size });
     edges.push([parent, pos]);

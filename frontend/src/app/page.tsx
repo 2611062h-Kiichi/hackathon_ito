@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, type ReactNode } from "react";
-import MindMap from "@/components/MindMap";
+import MindMap, { DROP_ZONE_ATTR, type DragState } from "@/components/MindMap";
 import {
   expandWords,
   googleSearchUrl,
@@ -23,6 +23,11 @@ export default function MindMapPage() {
   const [error, setError] = useState<string | null>(null);
   // 広げた結果のお知らせ（新しい言葉が出なかったときなど、マップのすぐ上に出す）
   const [notice, setNotice] = useState<string | null>(null);
+  // 「次に勉強すること」のパネルを開いているか
+  const [panelOpen, setPanelOpen] = useState(false);
+  // 自分で「次に勉強すること」に入れた見出し（ドラッグ・追加ボタン）。入れた順
+  const [pinned, setPinned] = useState<string[]>([]);
+  const [drag, setDrag] = useState<DragState>("none");
 
   const nodesRef = useRef<Record<string, MapNode>>({});
   const nextId = useRef(1);
@@ -39,8 +44,6 @@ export default function MindMapPage() {
   }
 
   const allWords = () => Object.values(nodesRef.current).map((n) => n.word);
-  const firstUnmarked = (except?: string) =>
-    Object.values(nodesRef.current).find((n) => n.status === "none" && n.id !== except)?.id ?? null;
 
   function setLoading(id: string, on: boolean) {
     if (on) inFlight.current.add(id);
@@ -102,7 +105,6 @@ export default function MindMapPage() {
       setNotice(null);
     }
     setFocusId(id);
-    setSelectedId((cur) => cur ?? firstUnmarked());
     prefetch(freshIds);
   }
 
@@ -153,19 +155,37 @@ export default function MindMapPage() {
     }
   }
 
-  // ○ はそこで止める。× はその言葉の直前に学ぶことを広げる。付けたら、まだの言葉へ進む
+  // ○ はそこで止める。× はその見出しの前提・中身を広げる。付けたら説明を閉じる（次の説明は勝手に開かない）
   function mark(id: string, status: "known" | "unknown") {
     const node = nodesRef.current[id];
     if (!node) return;
     updateNodes((prev) => ({ ...prev, [id]: { ...prev[id], status } }));
     if (status === "unknown" && !node.expanded) void expand(id);
-    setSelectedId(firstUnmarked(id));
+    setSelectedId(null);
   }
 
   function search(id: string) {
     const node = nodesRef.current[id];
     if (!node) return;
     window.open(googleSearchUrl(nodesRef.current[ROOT_ID].word, node.word), "_blank", "noopener,noreferrer");
+  }
+
+  // 斥力・ばねで落ち着いた位置を覚えておく（次に広げる見出しは、この位置をもとに置く）
+  function savePositions(positions: Record<string, { x: number; y: number }>) {
+    updateNodes((prev) => {
+      const next = { ...prev };
+      for (const [id, pos] of Object.entries(positions)) if (next[id]) next[id] = { ...next[id], ...pos };
+      return next;
+    });
+  }
+
+  function addToList(id: string) {
+    setPinned((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    setPanelOpen(true);
+  }
+
+  function removeFromList(id: string) {
+    setPinned((prev) => prev.filter((p) => p !== id));
   }
 
   function reset() {
@@ -177,11 +197,20 @@ export default function MindMapPage() {
     setSelectedId(null);
     setError(null);
     setNotice(null);
+    setPanelOpen(false);
+    setPinned([]);
   }
 
   const list = nodes ? Object.values(nodes) : [];
   const next = nodes ? nextToStudy(nodes, loadingIds) : [];
   const nextIds = new Set(next.map((n) => n.id));
+  // パネルに出す順：自分で入れた見出し → まだ入っていないおすすめ（土台がそろった × の見出し）
+  const studyList = nodes
+    ? [
+        ...pinned.filter((id) => nodes[id]).map((id) => ({ node: nodes[id], pinned: true })),
+        ...next.filter((n) => !pinned.includes(n.id)).map((node) => ({ node, pinned: false })),
+      ]
+    : [];
   const counts = {
     known: list.filter((n) => n.status === "known").length,
     unknown: list.filter((n) => n.status === "unknown").length,
@@ -189,75 +218,37 @@ export default function MindMapPage() {
   };
   const root = nodes?.[ROOT_ID];
 
-  return (
-    <main className="mx-auto w-full max-w-2xl px-4 pt-10 pb-12">
-      <header className="mb-6 text-center">
-        <h1 className="text-3xl font-black tracking-wide text-navy">ことばマップ</h1>
-        <p className="mt-2 text-sm text-navy/70">知りたいことに、わかることからたどり着こう</p>
-      </header>
-
-      {error && !nodes && <p className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
-
-      {!nodes && (
-        <form
-          className="space-y-4"
-          onSubmit={(e) => {
-            e.preventDefault();
-            start();
-          }}
-        >
-          <label className="block font-bold text-navy" htmlFor="word">
-            知りたいことは？
-          </label>
-          <p className="text-xs text-navy/60">大学の勉強やプログラミングなど、教科書や入門書がある分野で使えます。</p>
-          <input
-            id="word"
-            className="w-full rounded-lg border border-zinc-300 p-3 focus:border-leaf focus:outline-none"
-            placeholder="例：微分、継承、React"
-            maxLength={50}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-          />
-          <p className="text-xs text-navy/50">
-            入力した言葉と、たどった言葉はAIに送られます。名前や連絡先などの個人情報は入れないでください。
-          </p>
+  // マップを作ったら、ページ全体をマップにする（上は最小限のバーだけ）
+  if (nodes && root) {
+    const message = error ?? notice;
+    return (
+      <main className="fixed inset-0 flex flex-col bg-zinc-50">
+        <header className="flex items-center gap-2 border-b border-zinc-200 bg-white px-3 py-2 text-xs">
+          <h1 className="font-black text-navy">ことばマップ</h1>
+          <span className="flex flex-wrap items-center gap-1.5">
+            <Legend className="bg-leaf text-white">○ {counts.known}</Legend>
+            <Legend className="border border-sun bg-[#fde7c4] text-navy">× {counts.unknown}</Legend>
+            <Legend className="border border-dashed border-zinc-400 bg-white text-navy">まだ {counts.none}</Legend>
+          </span>
+          <span className="hidden items-center gap-2 text-navy/60 sm:flex">
+            <span>
+              <span className="mr-1 inline-block h-0.5 w-4 bg-navy/50 align-middle" />
+              前提
+            </span>
+            <span>
+              <span className="mr-1 inline-block h-0.5 w-4 bg-leaf align-middle" />
+              中身
+            </span>
+          </span>
           <button
-            type="submit"
-            className="w-full rounded-lg bg-leaf py-3 font-bold text-white disabled:opacity-40"
-            disabled={!input.trim()}
+            className="ml-auto rounded-lg border border-zinc-300 px-2 py-1 font-bold text-navy hover:bg-zinc-50"
+            onClick={reset}
           >
-            はじめる
+            新しく始める
           </button>
-        </form>
-      )}
+        </header>
 
-      {nodes && root && (
-        <section className="space-y-6">
-          <div className="space-y-2 text-center text-xs text-navy/70">
-            <p>
-              見出しを押して、わかるなら <b className="text-leaf">○</b>、わからないなら <b className="text-amber-700">×</b>{" "}
-              を付けよう。× を付けると、教科書の目次から「前提」と「中身」の見出しが広がります。
-            </p>
-            <p className="flex flex-wrap justify-center gap-2">
-              <Legend className="bg-leaf text-white">○ わかる {counts.known}</Legend>
-              <Legend className="border border-sun bg-[#fde7c4] text-navy">× わからない {counts.unknown}</Legend>
-              <Legend className="border border-dashed border-zinc-400 bg-white text-navy">まだ {counts.none}</Legend>
-            </p>
-            <p className="flex flex-wrap justify-center gap-3">
-              <span>
-                <span className="mr-1 inline-block h-0.5 w-5 bg-navy/50 align-middle" />
-                前提（その章より前に学ぶ）
-              </span>
-              <span>
-                <span className="mr-1 inline-block h-0.5 w-5 bg-leaf align-middle" />
-                中身（その章の中で学ぶ）
-              </span>
-            </p>
-          </div>
-
-          {error && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
-          {!error && notice && <p className="rounded-lg bg-navy/5 p-3 text-sm text-navy">{notice}</p>}
-
+        <div className="relative min-h-0 flex-1">
           <MindMap
             nodes={nodes}
             rootId={ROOT_ID}
@@ -268,59 +259,149 @@ export default function MindMapPage() {
             onSelect={setSelectedId}
             onMark={mark}
             onSearch={search}
+            onAddToList={addToList}
+            onDrag={setDrag}
+            onSettle={savePositions}
           />
 
-          <div className="rounded-2xl border border-zinc-200 p-4">
-            <h2 className="font-bold text-navy">次に勉強すること</h2>
-            {root.status === "known" ? (
-              <p className="mt-2 text-sm text-navy/80">
-                知りたかった「{root.word}」がわかるようになりました。おつかれさまでした！
-              </p>
-            ) : next.length ? (
-              <>
-                <p className="mt-1 text-xs text-navy/60">
-                  先に学ぶ見出しがわかっているので、ここから始められます。勉強したら ○ に変えると、次に進みます。
-                </p>
-                <ul className="mt-3 space-y-2">
-                  {next.map((n) => {
-                    const known = n.children.map((c) => nodes[c].word);
-                    return (
-                      <li key={n.id} className="rounded-lg bg-zinc-50 p-3">
-                        <button
-                          className="w-full text-left"
-                          onClick={() => {
-                            setSelectedId(n.id);
-                            setFocusId(n.id);
-                          }}
-                        >
-                          <span className="font-bold text-navy">{n.word}</span>
-                          <span className="mt-1 block text-sm text-navy/70">{n.meaning || "…"}</span>
-                          {known.length > 0 && (
-                            <span className="mt-1 block text-xs text-leaf">わかっている：{known.join("・")}</span>
-                          )}
-                        </button>
-                        <button className="mt-2 text-xs text-navy/60 underline" onClick={() => search(n.id)}>
-                          Webで調べる
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </>
-            ) : (
-              <p className="mt-2 text-sm text-navy/60">
-                {loadingIds.size
-                  ? "言葉を作っています…"
-                  : `まだ ○× を付けていない見出しが ${counts.none} 個あります。× の見出しの先が全部 ○ になると、ここに出ます。`}
-              </p>
+          {message && (
+            <div
+              className={`absolute top-3 left-1/2 z-20 flex w-[min(92%,36rem)] -translate-x-1/2 items-start gap-2 rounded-lg p-3 text-sm shadow-md ${
+                error ? "bg-red-50 text-red-700" : "bg-white text-navy"
+              }`}
+              role="status"
+            >
+              <p className="flex-1">{message}</p>
+              <button
+                className="text-navy/50 hover:text-navy"
+                aria-label="閉じる"
+                onClick={() => {
+                  setError(null);
+                  setNotice(null);
+                }}
+              >
+                ×
+              </button>
+            </div>
+          )}
+
+          <div
+            {...{ [DROP_ZONE_ATTR]: "" }}
+            className={`absolute right-3 bottom-3 left-3 z-20 rounded-xl border-2 bg-white shadow-lg transition-colors sm:right-auto sm:w-80 ${
+              drag === "over" ? "border-leaf bg-leaf/10" : drag === "dragging" ? "border-dashed border-leaf" : "border-zinc-200"
+            }`}
+          >
+            <button
+              className="flex w-full items-center justify-between px-3 py-2 text-sm font-bold text-navy"
+              aria-expanded={panelOpen}
+              onClick={() => setPanelOpen((v) => !v)}
+            >
+              <span>
+                {root.status === "known" ? `「${root.word}」がわかるようになりました` : "次に勉強すること"}
+                {root.status !== "known" && studyList.length > 0 && (
+                  <span className="ml-2 rounded-full bg-navy px-1.5 text-xs text-white">{studyList.length}</span>
+                )}
+              </span>
+              <span aria-hidden>{panelOpen ? "▾" : "▴"}</span>
+            </button>
+            {drag !== "none" && <p className="px-3 pb-2 text-xs font-bold text-leaf">ここに離すと追加します</p>}
+            {panelOpen && (
+              <div className="max-h-[40vh] overflow-auto border-t border-zinc-100 px-3 pb-3">
+                {root.status === "known" && <p className="mt-2 text-sm text-navy/80">おつかれさまでした！</p>}
+                {studyList.length ? (
+                  <ul className="mt-2 space-y-2">
+                    {studyList.map(({ node: n, pinned: isPinned }) => {
+                      const known = n.children.filter((c) => nodes[c].status === "known").map((c) => nodes[c].word);
+                      return (
+                        <li key={n.id} className="rounded-lg bg-zinc-50 p-2">
+                          <div className="flex items-start gap-2">
+                            <button
+                              className="flex-1 text-left"
+                              onClick={() => {
+                                setSelectedId(n.id);
+                                setFocusId(n.id);
+                              }}
+                            >
+                              <span className="font-bold text-navy">{n.word}</span>
+                              {!isPinned && (
+                                <span className="ml-2 rounded-full bg-navy/10 px-1.5 text-[10px] text-navy">おすすめ</span>
+                              )}
+                              <span className="mt-0.5 block text-xs text-navy/70">{n.meaning || "…"}</span>
+                              {known.length > 0 && (
+                                <span className="mt-0.5 block text-xs text-leaf">わかっている：{known.join("・")}</span>
+                              )}
+                            </button>
+                            {isPinned && (
+                              <button
+                                className="text-navy/40 hover:text-navy"
+                                aria-label={`${n.word}をリストから外す`}
+                                onClick={() => removeFromList(n.id)}
+                              >
+                                ×
+                              </button>
+                            )}
+                          </div>
+                          <button className="mt-1 text-xs text-navy/60 underline" onClick={() => search(n.id)}>
+                            Webで調べる
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : (
+                  root.status !== "known" && (
+                    <p className="mt-2 text-xs text-navy/60">
+                      見出しをここへドラッグすると追加できます。× の見出しの先が全部 ○ になったものは、おすすめとして自動で出ます。
+                    </p>
+                  )
+                )}
+              </div>
             )}
           </div>
+        </div>
+      </main>
+    );
+  }
 
-          <button className="w-full rounded-lg border border-zinc-300 py-3 font-bold text-navy" onClick={reset}>
-            新しい言葉で始める
-          </button>
-        </section>
-      )}
+  return (
+    <main className="mx-auto w-full max-w-2xl px-4 pt-10 pb-12">
+      <header className="mb-6 text-center">
+        <h1 className="text-3xl font-black tracking-wide text-navy">ことばマップ</h1>
+        <p className="mt-2 text-sm text-navy/70">知りたいことに、わかることからたどり着こう</p>
+      </header>
+
+      {error && <p className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+
+      <form
+        className="space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          start();
+        }}
+      >
+        <label className="block font-bold text-navy" htmlFor="word">
+          知りたいことは？
+        </label>
+        <p className="text-xs text-navy/60">大学の勉強やプログラミングなど、教科書や入門書がある分野で使えます。</p>
+        <input
+          id="word"
+          className="w-full rounded-lg border border-zinc-300 p-3 focus:border-leaf focus:outline-none"
+          placeholder="例：微分、継承、React"
+          maxLength={50}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+        />
+        <p className="text-xs text-navy/50">
+          入力した言葉と、たどった言葉はAIに送られます。名前や連絡先などの個人情報は入れないでください。
+        </p>
+        <button
+          type="submit"
+          className="w-full rounded-lg bg-leaf py-3 font-bold text-white disabled:opacity-40"
+          disabled={!input.trim()}
+        >
+          はじめる
+        </button>
+      </form>
     </main>
   );
 }

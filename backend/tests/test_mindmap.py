@@ -95,6 +95,9 @@ def test_prompt_asks_for_textbook_headings(fake_ai):
     assert "目次に実際に載っている見出しの言葉をそのまま" in calls[0]
     assert "before（前提）" in calls[0] and "inside（中身）" in calls[0]
     assert "学び終えた後の章の見出しは出さない" in calls[0]
+    # 深くなっても広がるように、中身は1段細かい見出しを必ず出させる（自分自身や広い見出しは入れない）
+    assert "1段細かく" in calls[0]
+    assert "中身は必ず1個以上入れる" in calls[0]
 
 
 def test_batch_keeps_request_order(fake_ai):
