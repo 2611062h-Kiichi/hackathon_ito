@@ -3,10 +3,10 @@
 // 画像は public/knit/{item}-{stage}.png（元画像: docs/images/knitting.png）
 
 export const KNIT_ITEMS = [
-  { id: "scarf", name: "マフラー" },
-  { id: "hat", name: "ニット帽" },
-  { id: "sweater", name: "セーター" },
-  { id: "socks", name: "くつした" },
+  { id: "scarf", name: "マフラー", color: "#e9785f" },
+  { id: "hat", name: "ニット帽", color: "#8db360" },
+  { id: "sweater", name: "セーター", color: "#f2c14e" },
+  { id: "socks", name: "くつした", color: "#e9785f" },
 ] as const;
 
 export type KnitItem = (typeof KNIT_ITEMS)[number];

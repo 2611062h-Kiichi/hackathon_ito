@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
+import Header from "@/components/Header";
 import Knit from "@/components/Knit";
+import Markdown from "@/components/Markdown";
 import SummaryCard from "@/components/SummaryCard";
 import { getSession, type SessionDetail } from "@/lib/api";
 import { DETAIL_LABELS } from "@/lib/followUp";
@@ -22,12 +24,13 @@ function RecordDetail() {
   }, [id]);
 
   return (
-    <main className="mx-auto w-full max-w-2xl space-y-6 px-4 pt-10 pb-28">
+    <main className="mx-auto w-full max-w-xl space-y-6 px-4 pt-6 pb-28">
+      <Header />
       <Link href="/records" className="text-sm text-navy/70 underline">
         ← 記録一覧へ
       </Link>
 
-      {error && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+      {error && <p className="rounded-2xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
       {!session && !error && <p className="text-center text-navy/60">読み込み中…</p>}
 
       {session && (
@@ -48,14 +51,14 @@ function RecordDetail() {
           {session.status === "completed" ? (
             <SummaryCard session={session} />
           ) : (
-            <p className="rounded-lg bg-zinc-100 p-3 text-sm">
+            <p className="rounded-2xl bg-navy/5 p-3 text-sm">
               この記録は途中で終わっています（学習メモは未作成）。
             </p>
           )}
 
           <section className="space-y-2">
             <h2 className="font-bold text-navy">わからなかったこと</h2>
-            <p className="rounded-lg bg-zinc-50 p-3">{session.topic}</p>
+            <p className="rounded-2xl bg-paper p-3 shadow-soft">{session.topic}</p>
             {Object.entries(session.details).map(([key, value]) => (
               <p key={key} className="text-sm">
                 <span className="font-bold text-navy/70">{DETAIL_LABELS[key] ?? key}：</span>
@@ -68,12 +71,12 @@ function RecordDetail() {
             <section className="space-y-2">
               <h2 className="font-bold text-navy">受けた説明</h2>
               {session.explanations.map((e) => (
-                <details key={e.attempt} className="rounded-lg border border-zinc-200 p-3">
+                <details key={e.attempt} className="rounded-2xl bg-paper p-4 shadow-soft">
                   <summary className="cursor-pointer text-sm font-bold text-sun">
                     説明 {e.attempt} 回目
                   </summary>
-                  <div className="mt-2 whitespace-pre-wrap text-sm leading-relaxed">
-                    {e.content}
+                  <div className="mt-3 text-sm">
+                    <Markdown>{e.content}</Markdown>
                   </div>
                 </details>
               ))}

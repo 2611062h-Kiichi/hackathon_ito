@@ -1,12 +1,19 @@
 @import "tailwindcss";
 
-/* ロゴの配色 */
+/* ロゴと編み物イラストの配色 */
 @theme {
   --color-leaf: #3fa77a;
   --color-sun: #f0a73a;
   --color-navy: #13254a;
+  --color-cream: #fbf6ee;
+  --color-paper: #fffdf9;
+  --color-yarn: #e9785f;
+  --color-yarn-green: #8db360;
+  --color-yarn-yellow: #f2c14e;
   --font-sans: var(--font-noto-sans-jp), sans-serif;
+  --shadow-soft: 0 2px 0 rgb(19 37 74 / 0.04), 0 8px 24px -12px rgb(19 37 74 / 0.18);
   --animate-knit-in: knit-in 0.5s ease-out;
+  --animate-fade-up: fade-up 0.35s ease-out;
 
   @keyframes knit-in {
     from {
@@ -18,9 +25,97 @@
       transform: scale(1);
     }
   }
+
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
 }
 
 body {
-  background: #ffffff;
+  background-color: var(--color-cream);
+  /* 編み目のようなうっすらした模様 */
+  background-image: radial-gradient(rgb(19 37 74 / 0.035) 1px, transparent 1px);
+  background-size: 14px 14px;
   color: #1f2937;
+}
+
+/* ---------- AI待ちの編み物アニメーション ---------- */
+.knit-ball {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: knit-ball-roll 3s linear infinite;
+}
+.knit-needle-l,
+.knit-needle-r {
+  transform-box: fill-box;
+  animation: knit-needle 0.9s ease-in-out infinite alternate;
+}
+.knit-needle-l {
+  transform-origin: right center;
+}
+.knit-needle-r {
+  transform-origin: left center;
+  animation-delay: -0.45s;
+}
+.knit-row {
+  opacity: 0;
+  animation: knit-row 4.8s ease-out infinite;
+}
+.knit-thread {
+  stroke-dasharray: 4 5;
+  animation: knit-thread 1.2s linear infinite;
+}
+
+@keyframes knit-ball-roll {
+  to {
+    transform: rotate(-360deg);
+  }
+}
+@keyframes knit-needle {
+  from {
+    transform: rotate(-4deg);
+  }
+  to {
+    transform: rotate(4deg);
+  }
+}
+/* 1段ずつ編み上がり、最後にほどけてくり返す */
+@keyframes knit-row {
+  0% {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  8%,
+  85% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes knit-thread {
+  to {
+    stroke-dashoffset: -18;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .knit-ball,
+  .knit-needle-l,
+  .knit-needle-r,
+  .knit-thread {
+    animation: none;
+  }
+  .knit-row {
+    animation: none;
+    opacity: 1;
+  }
 }

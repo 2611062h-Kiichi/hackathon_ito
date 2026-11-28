@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import Header from "@/components/Header";
 import Knit from "@/components/Knit";
 import { listSessions, type SessionSummary } from "@/lib/api";
 import { KNIT_ITEMS, knitImage, knitItemFor, knitStage } from "@/lib/knit";
@@ -46,17 +47,18 @@ export default function RecordsPage() {
   }, [sessions]);
 
   return (
-    <main className="mx-auto w-full max-w-2xl px-4 pt-10 pb-28">
+    <main className="mx-auto w-full max-w-xl px-4 pt-6 pb-28">
+      <Header />
       <h1 className="mb-1 text-2xl font-black text-navy">記録</h1>
       <p className="mb-6 text-sm text-navy/60">これまでに見つけた「糸口」の学習メモです。</p>
 
-      {error && <p className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+      {error && <p className="mb-4 rounded-2xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
       {!sessions && !error && <p className="text-center text-navy/60">読み込み中…</p>}
 
       {sessions && sessions.length === 0 && (
-        <div className="space-y-4 rounded-lg bg-zinc-50 p-6 text-center">
+        <div className="space-y-4 rounded-3xl bg-paper p-6 text-center shadow-soft">
           <p className="text-navy/70">まだ記録がありません。</p>
-          <Link href="/" className="inline-block rounded-lg bg-leaf px-4 py-2 font-bold text-white">
+          <Link href="/" className="inline-block rounded-full bg-leaf px-5 py-2.5 font-bold text-white">
             糸口を探しにいく
           </Link>
         </div>
@@ -64,7 +66,7 @@ export default function RecordsPage() {
 
       {sessions && sessions.length > 0 && (
         <>
-          <section className="mb-6 rounded-xl bg-sun/10 p-4">
+          <section className="mb-6 rounded-3xl bg-paper p-4 shadow-soft">
             <p className="mb-2 text-sm font-bold text-navy">完成した編み物</p>
             <ul className="grid grid-cols-4 gap-2">
               {KNIT_ITEMS.map((item) => {
@@ -95,7 +97,7 @@ export default function RecordsPage() {
                 className={`shrink-0 rounded-full border px-3 py-1 text-sm ${
                   genre === g
                     ? "border-leaf bg-leaf text-white"
-                    : "border-zinc-300 text-navy/70 hover:border-leaf"
+                    : "border-navy/10 bg-paper text-navy/70 hover:border-leaf"
                 }`}
               >
                 {g}
@@ -108,7 +110,7 @@ export default function RecordsPage() {
               <li key={s.id}>
                 <Link
                   href={`/records/${s.id}`}
-                  className="flex items-center gap-3 rounded-lg border border-zinc-200 p-3 hover:border-leaf"
+                  className="flex items-center gap-3 rounded-2xl bg-paper p-3 shadow-soft transition hover:-translate-y-0.5"
                 >
                   <div className="shrink-0">
                     <Knit sessionId={s.id} stage={stageOf(s)} size="sm" />
@@ -123,7 +125,7 @@ export default function RecordsPage() {
                       )}
                       <span>{PATTERN_LABELS[s.pattern]}</span>
                       {s.status === "in_progress" && (
-                        <span className="rounded-full bg-zinc-100 px-2 py-0.5">途中</span>
+                        <span className="rounded-full bg-navy/5 px-2 py-0.5">途中</span>
                       )}
                     </div>
                     <p className="font-bold text-navy">{s.title ?? s.topic}</p>
