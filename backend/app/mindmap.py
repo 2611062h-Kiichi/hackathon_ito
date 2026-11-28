@@ -1,8 +1,11 @@
-"""ことばマップ：わからない言葉から、関連する言葉を放射状に広げる機能。
+"""ことばマップ：知りたい言葉から、教科書の目次の見出しをたどって「どこまでわかっているか」を確かめる機能。
 
-- 1つの言葉につき候補を7個返す。画面側で、すでにマップにある言葉を除いて5個を表示する
-- 表示した5個の先も1回の呼び出しでまとめて作っておく（先読み）
-- 各言葉には一言説明を付ける（押したときに表示し、そのまま「わからなかった言葉」に記録する）
+- 「わからない（×）」と答えた言葉について、教科書の目次に載っている見出しを2つの枝で返す
+  - 前提（before）：その言葉の章より前の章の見出し
+  - 中身（inside）：その言葉の章の中の見出し
+  どちらも学ぶ順（基本 → 先）に1〜3個
+- 見出しには「わかる＝何ができることか」を付ける（相手はそれを見て ○ / × を答える）
+- 画面に出た見出しの先も1回の呼び出しでまとめて作っておく（先読み）
 """
 
 import logging
@@ -21,46 +24,70 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/mindmap", tags=["mindmap"])
 
-CANDIDATES_PER_WORD = 7
-MAX_TARGETS = 5
+MAX_PER_KIND = 3  # 1つの枝の見出しの数の上限
+MAX_TARGETS = 8  # 先読みでまとめて頼む言葉の数の上限
 
-# ことばマップは押すたびに待たせるので、アプリ全体の設定とは別に速いモデルを使う。
+# ことばマップは押すたびに待たせるので、速いモデルを使う。
 # （モデル名, 考える量）を上から順に試す。考える量を最小にすると、中身はほぼ同じで数倍速い
 MODELS: list[tuple[str, str | None]] = [
     ("gemini-3.5-flash", "minimal"),
     ("gemini-3.5-flash-lite", None),
 ]
 TIMEOUT_MS = 35_000  # 返事がないモデルで待ち続けないように、この時間で次のモデルへ
-RETRYABLE_CODES = {*gemini.RETRYABLE_CODES, 504}
 
 Word = Field(min_length=1, max_length=50)
-
-# 候補の言葉が、元の言葉を理解するうえでどんな役割か（画面に小さな印として出す）
-Role = Literal["前提", "しくみ", "違い", "つまずき", "場面"]
+Kind = Literal["before", "inside"]
 
 
 class Target(BaseModel):
     word: str = Word
     path: list[str] = Field(
-        default_factory=list, max_length=20, description="中心の言葉からこの言葉の親までの経路（中心を含む）"
+        default_factory=list, max_length=20, description="知りたい言葉（中心）からこの言葉の親までの経路"
     )
 
 
 class ExpandRequest(BaseModel):
     targets: list[Target] = Field(min_length=1, max_length=MAX_TARGETS)
-    exclude: list[str] = Field(default_factory=list, max_length=300, description="すでにマップにある言葉")
+    existing: list[str] = Field(
+        default_factory=list,
+        max_length=300,
+        description="すでにマップにある言葉（同じ見出しなら同じ表記で使ってよい）",
+    )
+
+
+# ---- AI に返させる形（前提と中身を分けて、章も書かせる。章は言葉選びの手がかりで、画面には返さない） ----
+
+
+class TocStep(BaseModel):
+    chapter: str = Field(description="この見出しが載っている教科書・入門書・公式ドキュメントの章（例：数学Ⅱ 微分法）")
+    word: str = Field(description="その章の目次に載っている見出しの言葉をそのまま。12文字以内")
+    can_do: str = Field(description="その見出しが「わかる」とは何ができることか。「〜できる」で終わる30文字以内")
+
+
+class TocTree(BaseModel):
+    word: str = Field(description="わからない言葉（入力そのまま）")
+    meaning: str = Field(description="わからない言葉の一言説明。やさしい言葉で30文字以内")
+    before: list[TocStep] = Field(description=f"前提：この言葉の章より前の章の見出しを、学ぶ順に1〜{MAX_PER_KIND}個")
+    inside: list[TocStep] = Field(description=f"中身：この言葉の章の中の見出しを、学ぶ順に1〜{MAX_PER_KIND}個")
+
+
+class TocResult(BaseModel):
+    results: list[TocTree]
+
+
+# ---- 画面に返す形 ----
 
 
 class Candidate(BaseModel):
-    word: str = Field(description="知っておくとよい言葉。12文字以内の用語")
-    role: Role = Field(description="元の言葉を理解するうえでの役割")
-    meaning: str = Field(description="元の言葉とのつながりがわかる一言説明。やさしい言葉で30文字以内")
+    word: str
+    kind: Kind = Field(description="before：前提の枝 / inside：中身の枝")
+    meaning: str = Field(description="この見出しが「わかる」とは何ができることか")
 
 
 class Expansion(BaseModel):
-    word: str = Field(description="広げる元の言葉（入力そのまま）")
-    meaning: str = Field(description="広げる元の言葉の一言説明。やさしい言葉で30文字以内")
-    candidates: list[Candidate] = Field(description=f"知っておくとよい言葉を{CANDIDATES_PER_WORD}個")
+    word: str
+    meaning: str
+    candidates: list[Candidate] = Field(description="前提の見出し（学ぶ順）→ 中身の見出し（学ぶ順）")
 
 
 class ExpandResult(BaseModel):
@@ -78,98 +105,94 @@ def build_prompt(req: ExpandRequest) -> str:
         if t.path:
             lines.append(f"{i}. {t.word}（たどった道: {' → '.join([*t.path, t.word])}）")
         else:
-            lines.append(f"{i}. {t.word}（中心の言葉）")
-    exclude = "、".join(req.exclude[:300]) or "（なし）"
-    return f"""あなたは、初めての人がどこでつまずくかをよく知っている案内役です。
-相手は、言葉を名前だけ知っていて、何がわからないのかも説明できない人です。
-次の言葉それぞれについて、「この言葉がわかるために知っておくとよい言葉」を{CANDIDATES_PER_WORD}個ずつ挙げてください。
+            lines.append(f"{i}. {t.word}（知りたい言葉）")
+    existing = "、".join(req.existing[:300]) or "（なし）"
+    return f"""あなたは、勉強をする人が「どこまでわかっているか」を確かめるための、学習の地図を作る先生です。
+相手は、次の言葉が「わからない」と答えました。
+それぞれについて、教科書の目次をもとに、確かめる見出しを挙げてください。相手は見出しごとに「わかる／わからない」を答えます。
 
-# 言葉
+# わからない言葉
 {chr(10).join(lines)}
 
-# すでに画面に出ている言葉（使わない）
-{exclude}
+# すでにマップにある言葉
+{existing}
+（同じ見出しがこの中にあれば、同じ書き方で使ってよい）
 
-# 良い候補とは
-わかると、元の言葉の理解が一歩進む言葉。
-- 教科書や解説書の「索引」に載るような、その分野の用語に限る
-- {CANDIDATES_PER_WORD}個の中に、次の役割（role）のうち3種類以上を混ぜる。当てはまらない役割は無理に使わない
-  - 前提：先に知らないと話が通じない言葉（中心の言葉のときだけ多めに）
-  - しくみ：中で何が起きているかを作っている部品や考え方
-  - 違い：比べるとわかる相手（似ている言葉、対になる言葉）
-  - つまずき：初心者が誤解しやすい点・難しく感じる点
-  - 場面：実際に使われる場面や、次に出会う言葉
-- たどった道が深くなったら、基本に戻らず、その言葉の一歩先（しくみ・違い・つまずき）を中心にする
-- どの言葉も、中心の言葉（たどった道の最初の言葉）の話題からそれない。
-  「違い」で出た別の分野の言葉を広げるときも、中心の言葉と比べてわかることを選ぶ
+# 見出しの選び方（いちばん大事）
+- その分野の定番の教科書・入門書・公式ドキュメントを思い浮かべ、**目次に実際に載っている見出しの言葉をそのまま**使う
+  （例：数学なら「微分係数」「導関数」「平均値の定理」、Python なら「制御構文」「関数」「クラス」「継承」）
+- 説明的な言い換え（「コードの流用」「設計図と実体」など）や、自分で作った言葉は使わない
+- 1つの見出しは、目次の節（1〜2ページ〜1章）くらいのまとまりにする
+- chapter には、その見出しが載っている教科書・入門書の章を書く
 
-# 出さないもの
-- 説明がなくても誰でもわかる普通の言葉や、「中心」「周り」「性質」のようなぼんやりした一般語
-- 元の言葉を言い換えただけの言葉、元の言葉に何かを付け足しただけの言葉
-- たどった道にある言葉、同じ言葉の重複
+# 2つに分ける
+- before（前提）：この言葉の章より前の章に載っている見出し。学ぶ順に1〜{MAX_PER_KIND}個
+- inside（中身）：この言葉の章の中に載っている見出し。学ぶ順に1〜{MAX_PER_KIND}個
+- この言葉を学び終えた後の章の見出しは出さない
+- たどった道は分野の手がかりとして使う。見出しは、たどった道の言葉ではなく、**この言葉そのもの**の前提と中身にする
+- この言葉自身と、たどった道にある言葉は見出しにしない
+- 数を埋めるために足さない
 
 # 書き方
-- word は12文字以内の用語。文や説明は書かない
-- meaning は中学生にもわかる言葉で30文字以内。辞書の定義ではなく、元の言葉とのつながりがわかるように書く
+- word：見出しの言葉。12文字以内
+- can_do：その見出しが「わかる」とは何ができることか。「〜できる」で終わる、30文字以内
+- meaning：わからない言葉そのものの一言説明を30文字以内
 - results は上の言葉と同じ順番・同じ数で返す。word は入力の言葉をそのまま書く
 """
 
 
-DEMO_ROLES: list[Role] = ["前提", "しくみ", "違い", "つまずき", "場面"]
-
-
-def _demo_result(req: ExpandRequest) -> ExpandResult:
+def _demo_result(req: ExpandRequest) -> TocResult:
     """APIキー未設定時の固定データ（画面の動作確認用）。"""
-    return ExpandResult(
+
+    def steps(word: str, label: str) -> list[TocStep]:
+        return [
+            TocStep(chapter="デモ", word=f"{word}の{label}{i}", can_do=f"【デモ】{word}の{label}{i}を説明できる")
+            for i in range(1, 3)
+        ]
+
+    return TocResult(
         results=[
-            Expansion(
+            TocTree(
                 word=t.word,
                 meaning=f"【デモ】「{t.word}」の一言説明",
-                candidates=[
-                    Candidate(
-                        word=f"{t.word}の関連{i}",
-                        role=DEMO_ROLES[(i - 1) % len(DEMO_ROLES)],
-                        meaning=f"【デモ】{t.word}に関係する言葉{i}",
-                    )
-                    for i in range(1, CANDIDATES_PER_WORD + 1)
-                ],
+                before=steps(t.word, "前提"),
+                inside=steps(t.word, "中身"),
             )
             for t in req.targets
         ]
     )
 
 
-def _clean(target: Target, expansion: Expansion | None) -> Expansion:
-    """元の言葉・経路と同じ言葉、候補どうしの重複、空の言葉を取り除く。"""
+def _clean(target: Target, tree: TocTree | None) -> Expansion:
+    """元の言葉・経路と同じ見出し、見出しどうしの重複、空の見出しを取り除き、前提 → 中身の順に並べる。"""
     seen = {normalize(w) for w in [*target.path, target.word]}
     candidates: list[Candidate] = []
-    for c in expansion.candidates if expansion else []:
-        word, key = c.word.strip(), normalize(c.word)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        candidates.append(Candidate(word=word[:50], role=c.role, meaning=c.meaning.strip()[:100]))
-    return Expansion(
-        word=target.word,
-        meaning=(expansion.meaning.strip()[:100] if expansion else ""),
-        candidates=candidates[:CANDIDATES_PER_WORD],
-    )
+    for kind, steps in (("before", tree.before if tree else []), ("inside", tree.inside if tree else [])):
+        kept = 0
+        for s in steps:
+            word, key = s.word.strip(), normalize(s.word)
+            if not key or key in seen or kept == MAX_PER_KIND:
+                continue
+            seen.add(key)
+            kept += 1
+            candidates.append(Candidate(word=word[:50], kind=kind, meaning=s.can_do.strip()[:100]))
+    return Expansion(word=target.word, meaning=(tree.meaning.strip()[:100] if tree else ""), candidates=candidates)
 
 
-def _generate(prompt: str) -> ExpandResult:
+def _generate(prompt: str) -> TocResult:
     """MODELS を順に試す。混雑・時間切れのときは次のモデルへ。"""
     last_error: Exception | None = None
     for model, thinking in MODELS:
         config = types.GenerateContentConfig(
             response_mime_type="application/json",
-            response_schema=ExpandResult,
+            response_schema=TocResult,
             thinking_config=types.ThinkingConfig(thinking_level=thinking) if thinking else None,
             http_options=types.HttpOptions(timeout=TIMEOUT_MS),
         )
         try:
-            response = gemini._get_client().models.generate_content(model=model, contents=prompt, config=config)
+            response = gemini.get_client().models.generate_content(model=model, contents=prompt, config=config)
         except errors.APIError as e:
-            if e.code not in RETRYABLE_CODES:
+            if e.code not in gemini.RETRYABLE_CODES:
                 raise
             logger.warning("ことばマップ: %s が使えないため次のモデルを試します: %s %s", model, e.code, e.status)
             last_error = e
@@ -178,33 +201,30 @@ def _generate(prompt: str) -> ExpandResult:
             logger.warning("ことばマップ: %s が時間切れのため次のモデルを試します", model)
             last_error = e
             continue
-        if isinstance(response.parsed, ExpandResult):
+        if isinstance(response.parsed, TocResult):
             return response.parsed
-        return ExpandResult.model_validate_json(response.text or "")
+        return TocResult.model_validate_json(response.text or "")
     raise gemini.GeminiUnavailableError(
         "AIが混み合っています。少し時間をおいてもう一度お試しください。"
     ) from last_error
 
 
 def expand_words(req: ExpandRequest) -> ExpandResult:
-    if settings.gemini_api_key:
-        raw = _generate(build_prompt(req))
-    else:
-        raw = _demo_result(req)
+    raw = _generate(build_prompt(req)) if settings.gemini_api_key else _demo_result(req)
     # AIが順番や言葉を変えて返しても、入力の言葉と対応づける
-    by_word = {normalize(e.word): e for e in raw.results}
+    by_word = {normalize(t.word): t for t in raw.results}
     results = []
     for i, t in enumerate(req.targets):
-        expansion = by_word.get(normalize(t.word))
-        if expansion is None and len(raw.results) == len(req.targets):
-            expansion = raw.results[i]
-        results.append(_clean(t, expansion))
+        tree = by_word.get(normalize(t.word))
+        if tree is None and len(raw.results) == len(req.targets):
+            tree = raw.results[i]
+        results.append(_clean(t, tree))
     return ExpandResult(results=results)
 
 
 @router.post("/expand", response_model=ExpandResult)
 def expand(req: ExpandRequest) -> ExpandResult:
-    """言葉（最大5個）それぞれについて、知っておくとよい用語を7個（役割・一言説明つき）返す。"""
+    """わからない言葉それぞれについて、教科書の目次の見出しを前提・中身の2つの枝で返す（学ぶ順、「〜できる」付き）。"""
     try:
         return expand_words(req)
     except gemini.GeminiUnavailableError as e:

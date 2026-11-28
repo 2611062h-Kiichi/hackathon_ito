@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Noto_Sans_JP } from "next/font/google";
-import BottomNav from "@/components/BottomNav";
 import "./globals.css";
 
 const notoSansJp = Noto_Sans_JP({
@@ -11,7 +10,7 @@ const notoSansJp = Noto_Sans_JP({
 
 export const metadata: Metadata = {
   title: "ITOGUCHI | イトグチ",
-  description: "わかるが、次の一歩の力になる。「わからない」の原因を分析して、理解へ導く支援アプリ。",
+  description: "わかるが、次の一歩の力になる。わからない言葉から、知っておくとよい言葉をたどって理解の糸口を見つけるアプリ。",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -19,7 +18,6 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html lang="ja" className={`${notoSansJp.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col font-sans">
         {children}
-        <BottomNav />
       </body>
     </html>
   );

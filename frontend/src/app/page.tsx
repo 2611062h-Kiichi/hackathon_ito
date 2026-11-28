@@ -1,305 +1,330 @@
 "use client";
 
-import Link from "next/link";
-import { useState } from "react";
-import Knit from "@/components/Knit";
-import SummaryCard from "@/components/SummaryCard";
+import { useRef, useState, type ReactNode } from "react";
+import MindMap from "@/components/MindMap";
 import {
-  completeSession,
-  createSession,
-  explainSession,
-  type ExplainResponse,
-  type SessionCreated,
-  type SessionDetail,
-} from "@/lib/api";
-import { FOLLOW_UP } from "@/lib/followUp";
-import { knitStage } from "@/lib/knit";
-import { CHOICES, QUESTIONS, UNDERSTANDING_LEVELS } from "@/lib/questions";
+  expandWords,
+  googleSearchUrl,
+  growTree,
+  nextToStudy,
+  pathTo,
+  type Candidate,
+  type MapNode,
+} from "@/lib/mindmap";
 
-type Step = "topic" | "survey" | "result" | "done";
+const ROOT_ID = "n0";
 
-export default function Home() {
-  const [step, setStep] = useState<Step>("topic");
-  const [topic, setTopic] = useState("");
-  const [answers, setAnswers] = useState<(number | null)[]>(
-    Array(QUESTIONS.length).fill(null),
-  );
-  const [result, setResult] = useState<SessionCreated | null>(null);
-  const [details, setDetails] = useState<Record<string, string>>({});
-  const [explanations, setExplanations] = useState<ExplainResponse[]>([]);
-  const [understanding, setUnderstanding] = useState<number | null>(null);
-  const [record, setRecord] = useState<SessionDetail | null>(null);
-  const [loading, setLoading] = useState(false);
+export default function MindMapPage() {
+  const [input, setInput] = useState("");
+  const [nodes, setNodes] = useState<Record<string, MapNode> | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  // 広げた結果のお知らせ（新しい言葉が出なかったときなど、マップのすぐ上に出す）
+  const [notice, setNotice] = useState<string | null>(null);
 
-  const latest = explanations.at(-1);
-  const allAnswered = answers.every((a) => a !== null);
+  const nodesRef = useRef<Record<string, MapNode>>({});
+  const nextId = useRef(1);
+  // 先読みした候補（言葉のID → AIが返した言葉）
+  const prefetched = useRef(new Map<string, Promise<Candidate[]>>());
+  // 新しく始め直したときに、前のマップの結果を捨てるための番号
+  const generation = useRef(0);
+  // 処理中の言葉（二度押しで AI を二重に呼ばないように、state ではなく ref で判定する）
+  const inFlight = useRef(new Set<string>());
 
-  async function run<T>(fn: () => Promise<T>) {
-    setLoading(true);
+  function updateNodes(fn: (prev: Record<string, MapNode>) => Record<string, MapNode>) {
+    nodesRef.current = fn(nodesRef.current);
+    setNodes(nodesRef.current);
+  }
+
+  const allWords = () => Object.values(nodesRef.current).map((n) => n.word);
+  const firstUnmarked = (except?: string) =>
+    Object.values(nodesRef.current).find((n) => n.status === "none" && n.id !== except)?.id ?? null;
+
+  function setLoading(id: string, on: boolean) {
+    if (on) inFlight.current.add(id);
+    else inFlight.current.delete(id);
+    setLoadingIds((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  // 画面に出た言葉の先を、1回の呼び出しでまとめて作っておく（× を押したらすぐ広がるように）
+  function prefetch(ids: string[]) {
+    if (!ids.length) return;
+    const gen = generation.current;
+    const targets = ids.map((id) => ({ word: nodesRef.current[id].word, path: pathTo(nodesRef.current, id) }));
+    const batch = expandWords(targets, allWords());
+    ids.forEach((id, i) => {
+      const p = batch.then((r) => (gen === generation.current ? (r[i]?.candidates ?? []) : []));
+      p.catch(() => {}); // 失敗したら、押したときに作り直す
+      prefetched.current.set(id, p);
+    });
+  }
+
+  async function candidatesFor(id: string): Promise<Candidate[]> {
+    const cached = prefetched.current.get(id);
+    if (cached) {
+      const result = await cached.catch(() => null);
+      if (result?.length) return result;
+    }
+    const target = { word: nodesRef.current[id].word, path: pathTo(nodesRef.current, id) };
+    const [r] = await expandWords([target], allWords());
+    return r?.candidates ?? [];
+  }
+
+  // 前提・中身の見出しをマップにつないで、まだ○×のない見出しを開く
+  function grow(id: string, candidates: Candidate[]) {
+    const word = nodesRef.current[id].word;
+    let freshIds: string[] = [];
+    let linkedIds: string[] = [];
+    updateNodes((prev) => {
+      const r = growTree(prev, id, candidates, () => `n${nextId.current++}`);
+      freshIds = r.freshIds;
+      linkedIds = r.linkedIds;
+      return r.nodes;
+    });
+    const linked = linkedIds.map((l) => `「${nodesRef.current[l].word}」`).join("");
+    if (!freshIds.length && !linkedIds.length) {
+      // これより前に学ぶことが出てこない＝ここが土台。次に勉強することとして扱う
+      setNotice(`「${word}」の前に学ぶ見出しは見つかりませんでした。ここから勉強を始めましょう。`);
+      return;
+    }
+    if (!freshIds.length) {
+      setNotice(`「${word}」で確かめる見出しは、すでにマップにある${linked}でした。点線でつないでいます。`);
+    } else if (linkedIds.length) {
+      setNotice(`マップにある${linked}も「${word}」に関わる見出しなので、点線でつないでいます。`);
+    } else {
+      setNotice(null);
+    }
+    setFocusId(id);
+    setSelectedId((cur) => cur ?? firstUnmarked());
+    prefetch(freshIds);
+  }
+
+  async function start() {
+    const word = input.trim();
+    if (!word) return;
+    const gen = ++generation.current;
+    prefetched.current.clear();
+    nextId.current = 1;
+    nodesRef.current = {};
+    // 知りたい言葉は、はじめから × （わからない）として広げる
+    updateNodes(() => ({
+      [ROOT_ID]: { id: ROOT_ID, word, meaning: "", kind: null, parentId: null, children: [], status: "unknown", expanded: false, x: 0, y: 0 },
+    }));
+    setSelectedId(null);
+    setFocusId(ROOT_ID);
     setError(null);
+    setNotice(null);
+    setLoading(ROOT_ID, true);
     try {
-      return await fn();
+      const [r] = await expandWords([{ word, path: [] }], []);
+      if (gen !== generation.current) return;
+      updateNodes((prev) => ({ ...prev, [ROOT_ID]: { ...prev[ROOT_ID], meaning: r?.meaning ?? "" } }));
+      grow(ROOT_ID, r?.candidates ?? []);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "エラーが発生しました");
+      if (gen === generation.current) setError(e instanceof Error ? e.message : "エラーが発生しました");
     } finally {
-      setLoading(false);
+      setLoading(ROOT_ID, false);
     }
   }
 
-  async function handleSubmitSurvey() {
-    const r = await run(() => createSession(topic, answers as number[]));
-    if (!r) return;
-    setResult(r);
-    setStep("result");
-  }
-
-  async function handleStartExplain() {
-    if (!result) return;
-    const ex = await run(() => explainSession(result.session_id, details));
-    if (ex) setExplanations([ex]);
-  }
-
-  async function handleReexplain() {
-    if (!result) return;
-    const ex = await run(() => explainSession(result.session_id));
-    if (ex) {
-      setExplanations((prev) => [...prev, ex]);
-      setUnderstanding(null);
+  async function expand(id: string) {
+    const node = nodesRef.current[id];
+    if (!node || node.expanded || inFlight.current.has(id)) return;
+    const gen = generation.current;
+    setError(null);
+    setLoading(id, true);
+    try {
+      const candidates = await candidatesFor(id);
+      if (gen !== generation.current) return;
+      grow(id, candidates);
+    } catch (e) {
+      // 広げられなかったら、もう一度 × を押せば作り直す
+      prefetched.current.delete(id);
+      if (gen === generation.current) setError(e instanceof Error ? e.message : "エラーが発生しました");
+    } finally {
+      setLoading(id, false);
     }
   }
 
-  async function handleComplete() {
-    if (!result || understanding === null) return;
-    const saved = await run(() => completeSession(result.session_id, understanding));
-    if (saved) {
-      setRecord(saved);
-      setStep("done");
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    }
+  // ○ はそこで止める。× はその言葉の直前に学ぶことを広げる。付けたら、まだの言葉へ進む
+  function mark(id: string, status: "known" | "unknown") {
+    const node = nodesRef.current[id];
+    if (!node) return;
+    updateNodes((prev) => ({ ...prev, [id]: { ...prev[id], status } }));
+    if (status === "unknown" && !node.expanded) void expand(id);
+    setSelectedId(firstUnmarked(id));
+  }
+
+  function search(id: string) {
+    const node = nodesRef.current[id];
+    if (!node) return;
+    window.open(googleSearchUrl(nodesRef.current[ROOT_ID].word, node.word), "_blank", "noopener,noreferrer");
   }
 
   function reset() {
-    setStep("topic");
-    setTopic("");
-    setAnswers(Array(QUESTIONS.length).fill(null));
-    setResult(null);
-    setDetails({});
-    setExplanations([]);
-    setUnderstanding(null);
-    setRecord(null);
+    generation.current++;
+    prefetched.current.clear();
+    nodesRef.current = {};
+    setNodes(null);
+    setInput("");
+    setSelectedId(null);
     setError(null);
+    setNotice(null);
   }
 
+  const list = nodes ? Object.values(nodes) : [];
+  const next = nodes ? nextToStudy(nodes, loadingIds) : [];
+  const nextIds = new Set(next.map((n) => n.id));
+  const counts = {
+    known: list.filter((n) => n.status === "known").length,
+    unknown: list.filter((n) => n.status === "unknown").length,
+    none: list.filter((n) => n.status === "none").length,
+  };
+  const root = nodes?.[ROOT_ID];
+
   return (
-    <main className="mx-auto w-full max-w-2xl px-4 pt-10 pb-28">
-      <header className="mb-8 text-center">
-        <h1 className="text-4xl font-black tracking-wide text-navy">ITOGUCHI</h1>
-        <p className="mt-1 text-sm text-navy/70">イトグチ</p>
-        <p className="mt-3 font-bold text-navy">わかるが、次の一歩の力になる。</p>
+    <main className="mx-auto w-full max-w-2xl px-4 pt-10 pb-12">
+      <header className="mb-6 text-center">
+        <h1 className="text-3xl font-black tracking-wide text-navy">ことばマップ</h1>
+        <p className="mt-2 text-sm text-navy/70">知りたいことに、わかることからたどり着こう</p>
       </header>
 
-      {error && (
-        <p className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>
-      )}
+      {error && !nodes && <p className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
 
-      {step === "topic" && (
-        <section className="space-y-4">
-          <label className="block font-bold text-navy" htmlFor="topic">
-            何がわからないですか？
+      {!nodes && (
+        <form
+          className="space-y-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            start();
+          }}
+        >
+          <label className="block font-bold text-navy" htmlFor="word">
+            知りたいことは？
           </label>
-          <textarea
-            id="topic"
-            className="h-32 w-full rounded-lg border border-zinc-300 p-3 focus:border-leaf focus:outline-none"
-            placeholder="例：Gitがわからない"
-            maxLength={500}
-            value={topic}
-            onChange={(e) => setTopic(e.target.value)}
+          <p className="text-xs text-navy/60">大学の勉強やプログラミングなど、教科書や入門書がある分野で使えます。</p>
+          <input
+            id="word"
+            className="w-full rounded-lg border border-zinc-300 p-3 focus:border-leaf focus:outline-none"
+            placeholder="例：微分、継承、React"
+            maxLength={50}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
           />
           <p className="text-xs text-navy/50">
-            入力内容は記録として保存され、AIの解説に使われます。名前や連絡先などの個人情報は書かないでください。
+            入力した言葉と、たどった言葉はAIに送られます。名前や連絡先などの個人情報は入れないでください。
           </p>
           <button
+            type="submit"
             className="w-full rounded-lg bg-leaf py-3 font-bold text-white disabled:opacity-40"
-            disabled={!topic.trim()}
-            onClick={() => setStep("survey")}
+            disabled={!input.trim()}
           >
-            次へ（8問アンケート）
+            はじめる
           </button>
-        </section>
+        </form>
       )}
 
-      {step === "survey" && (
+      {nodes && root && (
         <section className="space-y-6">
-          {QUESTIONS.map((q, i) => (
-            <fieldset key={i} className="rounded-lg border border-zinc-200 p-4">
-              <legend className="px-1 font-bold text-navy">
-                Q{i + 1}. {q}
-              </legend>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                {CHOICES.map((c) => (
-                  <button
-                    key={c.value}
-                    type="button"
-                    onClick={() =>
-                      setAnswers((prev) => prev.map((a, j) => (j === i ? c.value : a)))
-                    }
-                    className={`rounded-md border px-2 py-2 text-sm ${
-                      answers[i] === c.value
-                        ? "border-leaf bg-leaf text-white"
-                        : "border-zinc-300 hover:border-leaf"
-                    }`}
-                  >
-                    {c.label}
-                  </button>
-                ))}
-              </div>
-            </fieldset>
-          ))}
-          <button
-            className="w-full rounded-lg bg-leaf py-3 font-bold text-white disabled:opacity-40"
-            disabled={!allAnswered || loading}
-            onClick={handleSubmitSurvey}
-          >
-            {loading ? "分析中…" : "分析する"}
-          </button>
-        </section>
-      )}
-
-      {step === "result" && result && (
-        <section className="space-y-6">
-          <div className="rounded-lg bg-leaf/10 p-4">
-            <p className="text-sm text-navy/70">あなたのつまずきタイプ</p>
-            <p className="text-2xl font-black text-navy">{result.label}</p>
-            <p className="mt-1 text-sm text-navy/70">AIのサポート: {result.base.goal}</p>
+          <div className="space-y-2 text-center text-xs text-navy/70">
+            <p>
+              見出しを押して、わかるなら <b className="text-leaf">○</b>、わからないなら <b className="text-amber-700">×</b>{" "}
+              を付けよう。× を付けると、教科書の目次から「前提」と「中身」の見出しが広がります。
+            </p>
+            <p className="flex flex-wrap justify-center gap-2">
+              <Legend className="bg-leaf text-white">○ わかる {counts.known}</Legend>
+              <Legend className="border border-sun bg-[#fde7c4] text-navy">× わからない {counts.unknown}</Legend>
+              <Legend className="border border-dashed border-zinc-400 bg-white text-navy">まだ {counts.none}</Legend>
+            </p>
+            <p className="flex flex-wrap justify-center gap-3">
+              <span>
+                <span className="mr-1 inline-block h-0.5 w-5 bg-navy/50 align-middle" />
+                前提（その章より前に学ぶ）
+              </span>
+              <span>
+                <span className="mr-1 inline-block h-0.5 w-5 bg-leaf align-middle" />
+                中身（その章の中で学ぶ）
+              </span>
+            </p>
           </div>
 
-          <Knit
-            sessionId={result.session_id}
-            stage={explanations.length > 0 ? 2 : 1}
-            showCaption
+          {error && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+          {!error && notice && <p className="rounded-lg bg-navy/5 p-3 text-sm text-navy">{notice}</p>}
+
+          <MindMap
+            nodes={nodes}
+            rootId={ROOT_ID}
+            selectedId={selectedId}
+            loadingIds={loadingIds}
+            nextIds={nextIds}
+            focusId={focusId}
+            onSelect={setSelectedId}
+            onMark={mark}
+            onSearch={search}
           />
 
-          {explanations.length === 0 && (
-            <div className="space-y-4 rounded-lg border border-leaf/40 p-4">
-              <div>
-                <p className="font-bold text-navy">もう少しくわしく教えてください</p>
-                <p className="mt-1 text-sm text-navy/70">{FOLLOW_UP[result.pattern].lead}</p>
-              </div>
-              {FOLLOW_UP[result.pattern].fields.map((f) => (
-                <div key={f.key}>
-                  <label className="mb-1 block text-sm font-bold text-navy" htmlFor={f.key}>
-                    {f.label}
-                    <span className="ml-2 text-xs font-normal text-navy/50">任意</span>
-                  </label>
-                  <textarea
-                    id={f.key}
-                    className="h-20 w-full rounded-lg border border-zinc-300 p-3 text-sm focus:border-leaf focus:outline-none"
-                    placeholder={f.placeholder}
-                    maxLength={500}
-                    value={details[f.key] ?? ""}
-                    onChange={(e) => setDetails((prev) => ({ ...prev, [f.key]: e.target.value }))}
-                    disabled={loading}
-                  />
-                </div>
-              ))}
-              <button
-                className="w-full rounded-lg bg-leaf py-3 font-bold text-white disabled:opacity-40"
-                disabled={loading}
-                onClick={handleStartExplain}
-              >
-                {loading ? "AIが説明を考えています…" : "解説を聞く"}
-              </button>
-            </div>
-          )}
-
-          {explanations.map((ex) => (
-            <article key={ex.attempt} className="rounded-lg border border-zinc-200 p-4">
-              <p className="mb-2 text-xs font-bold text-sun">説明 {ex.attempt} 回目</p>
-              <div className="whitespace-pre-wrap leading-relaxed">{ex.explanation}</div>
-            </article>
-          ))}
-
-          {latest && (
-            <div className="space-y-3">
-              <p className="font-bold text-navy">どのくらい理解できましたか？</p>
-              <div className="grid grid-cols-5 gap-1">
-                {UNDERSTANDING_LEVELS.map((u) => (
-                  <button
-                    key={u.value}
-                    onClick={() => setUnderstanding(u.value)}
-                    disabled={loading}
-                    className={`rounded-md border p-2 text-xs ${
-                      understanding === u.value
-                        ? "border-leaf bg-leaf text-white"
-                        : "border-zinc-300 hover:border-leaf"
-                    }`}
-                  >
-                    <span className="block text-lg font-bold">{u.value}</span>
-                    {u.label}
-                  </button>
-                ))}
-              </div>
-
-              {understanding !== null && understanding >= 4 && (
-                <p className="rounded-lg bg-leaf/10 p-3 font-bold text-navy">
-                  🎉 理解できました！記録して、次の一歩を確認しましょう。
+          <div className="rounded-2xl border border-zinc-200 p-4">
+            <h2 className="font-bold text-navy">次に勉強すること</h2>
+            {root.status === "known" ? (
+              <p className="mt-2 text-sm text-navy/80">
+                知りたかった「{root.word}」がわかるようになりました。おつかれさまでした！
+              </p>
+            ) : next.length ? (
+              <>
+                <p className="mt-1 text-xs text-navy/60">
+                  先に学ぶ見出しがわかっているので、ここから始められます。勉強したら ○ に変えると、次に進みます。
                 </p>
-              )}
-              {understanding !== null && understanding <= 3 && latest.remaining === 0 && (
-                <p className="rounded-lg bg-zinc-100 p-3 text-sm">
-                  AI解説は1セッション3回までです。記録しておくと、まだわからない点も整理されます。
-                </p>
-              )}
+                <ul className="mt-3 space-y-2">
+                  {next.map((n) => {
+                    const known = n.children.map((c) => nodes[c].word);
+                    return (
+                      <li key={n.id} className="rounded-lg bg-zinc-50 p-3">
+                        <button
+                          className="w-full text-left"
+                          onClick={() => {
+                            setSelectedId(n.id);
+                            setFocusId(n.id);
+                          }}
+                        >
+                          <span className="font-bold text-navy">{n.word}</span>
+                          <span className="mt-1 block text-sm text-navy/70">{n.meaning || "…"}</span>
+                          {known.length > 0 && (
+                            <span className="mt-1 block text-xs text-leaf">わかっている：{known.join("・")}</span>
+                          )}
+                        </button>
+                        <button className="mt-2 text-xs text-navy/60 underline" onClick={() => search(n.id)}>
+                          Webで調べる
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            ) : (
+              <p className="mt-2 text-sm text-navy/60">
+                {loadingIds.size
+                  ? "言葉を作っています…"
+                  : `まだ ○× を付けていない見出しが ${counts.none} 個あります。× の見出しの先が全部 ○ になると、ここに出ます。`}
+              </p>
+            )}
+          </div>
 
-              {understanding !== null && understanding <= 3 && latest.remaining > 0 && (
-                <button
-                  className="w-full rounded-lg bg-sun py-3 font-bold text-white disabled:opacity-40"
-                  disabled={loading}
-                  onClick={handleReexplain}
-                >
-                  別の説明を聞く（あと{latest.remaining}回）
-                </button>
-              )}
-              {understanding !== null && (
-                <button
-                  className="w-full rounded-lg bg-navy py-3 font-bold text-white disabled:opacity-40"
-                  disabled={loading}
-                  onClick={handleComplete}
-                >
-                  {loading ? "AIが学習メモにまとめています…" : "記録して終わる"}
-                </button>
-              )}
-            </div>
-          )}
-        </section>
-      )}
-
-      {step === "done" && record && (
-        <section className="space-y-4">
-          <Knit
-            sessionId={record.id}
-            stage={knitStage({ status: record.status, understanding: record.understanding, explained: true })}
-            size="lg"
-            showCaption
-          />
-          <p className="text-center text-sm text-navy/70">
-            {record.understanding !== null && record.understanding >= 4
-              ? "学習メモとして記録しました。"
-              : "学習メモとして記録しました。わかったら、また続きを編みましょう。"}
-          </p>
-          <SummaryCard session={record} />
-          <Link
-            href="/records"
-            className="block w-full rounded-lg border border-leaf py-3 text-center font-bold text-leaf"
-          >
-            これまでの記録を見る
-          </Link>
-          <button className="w-full py-2 text-sm text-navy underline" onClick={reset}>
-            新しい「わからない」を入力する
+          <button className="w-full rounded-lg border border-zinc-300 py-3 font-bold text-navy" onClick={reset}>
+            新しい言葉で始める
           </button>
         </section>
       )}
     </main>
   );
+}
+
+function Legend({ className, children }: { className: string; children: ReactNode }) {
+  return <span className={`rounded-full px-2 py-0.5 font-bold ${className}`}>{children}</span>;
 }

@@ -8,52 +8,61 @@
 
 ## ITOGUCHI（イトグチ）とは
 
-**「わからない」を「理解」に変える支援アプリ**です。
+**知りたいことに、自分がわかることからたどり着くための勉強アプリ**です。大学の勉強やプログラミングのように、教科書や入門書がある分野向けです。
 
-いまの生成AIは、質問には答えてくれます。でも、その人が**なぜ**わからないのかまでは考えてくれません。
-ITOGUCHIは、まず「わからない原因」を分析し、その原因に合った説明をAIに頼むことで、理解までの糸口をつくります。
+知りたいことは、いきなり理解しようとしても難しいもの。
+ITOGUCHI では、知りたい言葉を1つ入れると、**教科書の目次に載っている見出し**が「前提」と「中身」の2つの枝で、学ぶ順に広がります。
+見出しごとに「こんなことができる？」に ○（わかる）か ×（わからない）を答えていくと、どこまでがわかっていて、どこからがわからないのかが見えてきます。
 
 ```
-8問で整理 → 3分類 → 質問土台を生成 → AIで理解を支援
+知りたい言葉を入れる → 前提・中身の見出しが広がる → ○ で止める / × でさらに広げる → 次に勉強することがわかる
 ```
 
-| つまずきタイプ | 状態 | AIの役割 |
-|---|---|---|
-| 判断の整理 | 情報はあるが決められない | 選択肢の整理、比較、優先順位付け |
-| 情報不足 | 知識や用語が足りない | 知識の補完、用語説明、具体例の提示 |
-| 心理的ブレーキ | 失敗が不安、自信がない | 不安の整理、小さな行動の支援 |
+### ことばマップのしくみ
 
-> 分類と質問土台の生成はルールベース（Python）で行い、**AIは使いません**。AI（Gemini）は解説と再説明だけを担当します（1セッション最大3回）。
+```
+     クラスとインスタンス ┐          ┌ メソッドのオーバーライド
+                          ├【継承】┤
+         メソッドと変数   ┘          └ スーパークラス
+   （前提：継承の章より前に学ぶ）   （中身：継承の章の中で学ぶ）
+```
+
+- **前提の枝**：その言葉の章より前の章の見出し。**中身の枝**：その言葉の章の中の見出し
+- 見出しはすべて、× を付けた言葉の直下に兄弟として並びます（目次の順番は学ぶ順であって、前の見出しが次の見出しの前提とは限らないため）
+- 見出しを押すと「こんなことができる？」（例：親クラスのメソッドを子クラスで上書きして定義できる）が出ます
+- **○（わかる）**：その枝はそこで止まります
+- **×（わからない）**：その見出しの前提・中身が、さらに広がります
+- **次に勉強すること**：× の見出しのうち、先に学ぶ見出しが全部 ○ のもの。勉強して ○ に変えると、次に進みます
+- 別の枝で出てきた同じ見出しは、新しく作らずに点線でつなぎます（○× も引き継がれます）
+- 画面に出た見出しの先は裏でまとめて作っておく（先読み）ので、× を押すとすぐ広がります
 
 ## 技術スタック
-
-![技術スタック構成図](docs/images/architecture.jpg)
 
 | 領域 | 技術 |
 |---|---|
 | フロントエンド | Next.js / TypeScript / Tailwind CSS（`frontend/`） |
 | バックエンド | Python / FastAPI（`backend/`） |
-| AI | Gemini 2.5 Flash |
-| DB | Supabase（PostgreSQL） |
+| AI | Gemini 3.5 Flash（混雑時は 3.5 Flash Lite） |
 | 開発・運用 | GitHub / GitHub Actions / npm / uv / Vercel（画面）/ Render（API） |
 
 ## ディレクトリ構成
 
 ```
 hackathon_ito/
-├─ frontend/                Next.js アプリ
+├─ frontend/                    Next.js アプリ
 │  └─ src/
-│     ├─ app/page.tsx       画面（入力 → アンケート → 解説 → 理解度確認）
-│     └─ lib/               API呼び出し・質問文
-├─ backend/                 FastAPI アプリ
+│     ├─ app/page.tsx           ことばマップの画面（入力・○×・先読み・次に勉強すること）
+│     ├─ components/MindMap.tsx マップの描画と ○× のポップアップ
+│     └─ lib/mindmap.ts         API呼び出し・見出しのつなぎ方・次に勉強すること・配置の計算
+├─ backend/                     FastAPI アプリ
 │  ├─ app/
-│  │  ├─ main.py            APIエンドポイント
-│  │  ├─ classifier.py      8問の採点と3分類
-│  │  ├─ prompt_builder.py  質問土台・プロンプト生成
-│  │  └─ gemini.py          Gemini API 呼び出し
+│  │  ├─ main.py                アプリ本体（CORS・ルーター登録）
+│  │  ├─ mindmap.py             目次の見出しを作るAPI（AIへの命令・モデル切り替え・結果の掃除）
+│  │  ├─ gemini.py              Gemini への接続
+│  │  └─ config.py              設定（.env）
 │  └─ tests/
 ├─ docs/
-│  └─ specification.md      要件定義書・仕様書（MVP）
+│  └─ specification.md          仕様書
 └─ .github/workflows/ci.yml
 ```
 
@@ -71,7 +80,7 @@ cd hackathon_ito
 ```bash
 cd backend
 uv sync
-cp .env.example .env      # GEMINI_API_KEY を設定（未設定ならデモ文が返る）
+cp .env.example .env      # GEMINI_API_KEY を設定（未設定ならデモの言葉が返る）
 uv run uvicorn app.main:app --reload
 ```
 
@@ -89,10 +98,11 @@ npm run dev
 → http://localhost:3000 を開く。
 
 Gemini APIキーは [Google AI Studio](https://aistudio.google.com/apikey) で取得できます。**`.env` は絶対にコミットしないでください。**
+無料枠はモデルごとに1日の回数上限があります（3.5 Flash は1日20回）。
 
 ## 開発の進め方
 
-1. `main` から作業ブランチを切る（例: `feat/survey-ui`、`fix/classify-tie`）
+1. `main` から作業ブランチを切る（例: `feat/save-records`、`fix/layout-overlap`）
 2. こまめにコミットしてプッシュする
 3. Pull Request を作成する（CIが通ったらマージ）
 
@@ -100,22 +110,20 @@ Gemini APIキーは [Google AI Studio](https://aistudio.google.com/apikey) で�
 git switch main && git pull
 git switch -c feat/xxx
 # ...作業...
-git add . && git commit -m "アンケート画面を作成"
+git add . && git commit -m "記録の保存を追加"
 git push -u origin feat/xxx
 ```
 
-## MVPのTODO
+## TODO
 
-- [x] わからない内容の入力
-- [x] 8問アンケート
-- [x] 3分類（ルールベース）
-- [x] AI質問土台の生成
-- [x] Gemini による解説
-- [x] 理解度の入力（5段階）
-- [x] 最大3回の再説明
-- [ ] 履歴の保存（Supabase）
-- [ ] AI利用回数のサーバー側管理（セッションID）
-- [ ] 全体の利用制限・デモ用の保存済み回答
+- [x] 知りたい言葉の入力
+- [x] 教科書の目次の見出しを前提・中身の枝で表示
+- [x] ○ で止める・× でさらに広げる
+- [x] 同じ見出しをつなぐ
+- [x] 次に勉強することの表示
+- [x] 先読み（画面に出た見出しの先をまとめて生成）
+- [ ] マップの保存（閉じても残す）
+- [ ] AI利用回数の制限（無料枠を守る）
 - [ ] デプロイ（Vercel / Render）
 
 詳細は [docs/specification.md](docs/specification.md) を参照してください。
